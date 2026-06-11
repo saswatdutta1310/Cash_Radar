@@ -1,0 +1,262 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Plan {
+  free
+  pro
+  enterprise
+}
+
+enum DataSourceType {
+  csv
+  tally
+  zoho
+  quickbooks
+  xero
+  open_banking
+}
+
+enum DataSourceStatus {
+  connected
+  disconnected
+  error
+  syncing
+}
+
+enum CategorySource {
+  ml
+  user
+  rule
+}
+
+enum Direction {
+  credit
+  debit
+}
+
+enum SimulationStatus {
+  queued
+  running
+  completed
+  failed
+}
+
+enum SimulationType {
+  standard
+  scenario
+}
+
+enum AlertSeverity {
+  info
+  warning
+  critical
+}
+
+enum SubscriptionStatus {
+  active
+  cancelled
+  past_due
+  trialing
+}
+
+model User {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  firebase_uid    String         @unique @db.VarChar(128)
+  email           String?        @unique @db.VarChar(255)
+  phone           String         @unique @db.VarChar(20)
+  name            String?        @db.VarChar(255)
+  plan            Plan           @default(free)
+  plan_expires_at DateTime?      @db.Timestamptz()
+  created_at      DateTime       @default(now()) @db.Timestamptz()
+  updated_at      DateTime       @default(now()) @db.Timestamptz()
+  deleted_at      DateTime?      @db.Timestamptz()
+
+  businesses      Business[]
+  subscriptions   Subscription[]
+
+  @@map("users")
+}
+
+model Business {
+  id                String    @id @default(uuid()) @db.Uuid
+  user_id           String    @db.Uuid
+  name              String    @db.VarChar(255)
+  industry          String    @db.VarChar(100)
+  revenue_range     String?   @db.VarChar(50)
+  gst_number        String?   @db.VarChar(20)
+  currency          String    @default("INR") @db.Char(3)
+  fiscal_year_start Int       @default(4) @db.SmallInt
+  created_at        DateTime  @default(now()) @db.Timestamptz()
+  deleted_at        DateTime? @db.Timestamptz()
+
+  user              User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  data_sources      DataSource[]
+  transactions      Transaction[]
+  simulations       Simulation[]
+  alerts            Alert[]
+  alert_preferences AlertPreference?
+
+  @@index([user_id])
+  @@map("businesses")
+}
+
+model DataSource {
+  id              String           @id @default(uuid()) @db.Uuid
+  business_id     String           @db.Uuid
+  type            DataSourceType
+  status          DataSourceStatus @default(connected)
+  last_synced_at  DateTime?        @db.Timestamptz()
+  credentials_ref String?          @db.VarChar(512)
+  metadata        Json?
+  created_at      DateTime         @default(now()) @db.Timestamptz()
+
+  business        Business         @relation(fields: [business_id], references: [id], onDelete: Cascade)
+  transactions    Transaction[]
+
+  @@map("data_sources")
+}
+
+model Transaction {
+  id                  String         @id @default(uuid()) @db.Uuid
+  business_id         String         @db.Uuid
+  data_source_id      String?        @db.Uuid
+  txn_date            DateTime       @db.Date
+  amount              Decimal        @db.Decimal(15, 2)
+  description_raw     String
+  description_clean   String?
+  category            String?        @db.VarChar(100)
+  category_confidence Decimal?       @db.Decimal(3, 2)
+  category_source     CategorySource @default(ml)
+  merchant_name       String?        @db.VarChar(255)
+  direction           Direction
+  is_recurring        Boolean?       @default(false)
+  external_id         String?        @db.VarChar(255)
+  created_at          DateTime       @default(now()) @db.Timestamptz()
+
+  business        Business    @relation(fields: [business_id], references: [id], onDelete: Cascade)
+  data_source     DataSource? @relation(fields: [data_source_id], references: [id])
+
+  @@index([business_id, txn_date(sort: Desc)])
+  @@index([category])
+  @@index([direction])
+  @@unique([data_source_id, external_id])
+  @@map("transactions")
+}
+
+model Simulation {
+  id                   String           @id @default(uuid()) @db.Uuid
+  business_id          String           @db.Uuid
+  status               SimulationStatus @default(queued)
+  type                 SimulationType   @default(standard)
+  scenario_params      Json?
+  iterations           Int              @default(10000)
+  horizon_days         Int              @default(180)
+  risk_score           Int?             @db.SmallInt
+  insolvency_prob_30d  Decimal?         @db.Decimal(5, 4)
+  insolvency_prob_90d  Decimal?         @db.Decimal(5, 4)
+  insolvency_prob_180d Decimal?         @db.Decimal(5, 4)
+  cash_runway_p50      Int?
+  results_blob_url     String?
+  error_message        String?
+  started_at           DateTime?        @db.Timestamptz()
+  completed_at         DateTime?        @db.Timestamptz()
+  created_at           DateTime         @default(now()) @db.Timestamptz()
+
+  business             Business         @relation(fields: [business_id], references: [id], onDelete: Cascade)
+  risk_scores          RiskScore[]
+  recommendations      Recommendation[]
+
+  @@map("simulations")
+}
+
+model RiskScore {
+  id                            String   @id @default(uuid()) @db.Uuid
+  business_id                   String   @db.Uuid
+  simulation_id                 String   @db.Uuid
+  score                         Int      @db.SmallInt
+  revenue_volatility_weight     Decimal? @db.Decimal(4, 3)
+  customer_concentration_weight Decimal? @db.Decimal(4, 3)
+  cash_reserve_weight           Decimal? @db.Decimal(4, 3)
+  payroll_exposure_weight       Decimal? @db.Decimal(4, 3)
+  debt_burden_weight            Decimal? @db.Decimal(4, 3)
+  computed_at                   DateTime @default(now()) @db.Timestamptz()
+
+  simulation                    Simulation @relation(fields: [simulation_id], references: [id], onDelete: Cascade)
+
+  @@map("risk_scores")
+}
+
+model Recommendation {
+  id                 String    @id @default(uuid()) @db.Uuid
+  business_id        String    @db.Uuid
+  simulation_id      String    @db.Uuid
+  priority           Int       @db.SmallInt
+  type               String    @db.VarChar(50)
+  title              String    @db.VarChar(255)
+  description        String
+  impact_score_delta Int?      @db.SmallInt
+  is_actioned        Boolean   @default(false)
+  created_at         DateTime  @default(now()) @db.Timestamptz()
+  expires_at         DateTime? @db.Timestamptz()
+
+  simulation         Simulation @relation(fields: [simulation_id], references: [id], onDelete: Cascade)
+
+  @@map("recommendations")
+}
+
+model Alert {
+  id              String        @id @default(uuid()) @db.Uuid
+  business_id     String        @db.Uuid
+  type            String        @db.VarChar(80)
+  severity        AlertSeverity
+  title           String        @db.VarChar(255)
+  body            String
+  triggered_value Decimal?
+  threshold_value Decimal?
+  is_read         Boolean       @default(false)
+  is_dismissed    Boolean       @default(false)
+  notified_via    String[]
+  created_at      DateTime      @default(now()) @db.Timestamptz()
+
+  business        Business      @relation(fields: [business_id], references: [id], onDelete: Cascade)
+
+  @@map("alerts")
+}
+
+model AlertPreference {
+  id                           String   @id @default(uuid()) @db.Uuid
+  business_id                  String   @unique @db.Uuid
+  risk_score_threshold         Int      @default(60) @db.SmallInt
+  cash_runway_threshold_days   Int      @default(30)
+  weekly_digest_enabled        Boolean  @default(true)
+  whatsapp_enabled             Boolean  @default(true)
+  email_enabled                Boolean  @default(true)
+  push_enabled                 Boolean  @default(true)
+  updated_at                   DateTime @default(now()) @db.Timestamptz()
+
+  business                     Business @relation(fields: [business_id], references: [id], onDelete: Cascade)
+
+  @@map("alert_preferences")
+}
+
+model Subscription {
+  id                       String             @id @default(uuid()) @db.Uuid
+  user_id                  String             @db.Uuid
+  razorpay_subscription_id String?            @unique @db.VarChar(255)
+  plan                     Plan
+  status                   SubscriptionStatus
+  current_period_start     DateTime?          @db.Timestamptz()
+  current_period_end       DateTime?          @db.Timestamptz()
+  cancelled_at             DateTime?          @db.Timestamptz()
+  created_at               DateTime           @default(now()) @db.Timestamptz()
+
+  user                     User               @relation(fields: [user_id], references: [id])
+
+  @@map("subscriptions")
+}
