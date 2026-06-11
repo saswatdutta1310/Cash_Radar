@@ -387,8 +387,3 @@ timeline
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
 
 ---
-
-<p align="center">
-  Built with ❤️ by <a href="https://github.com/saswatdutta1310">Saswat Dutta</a>
-</p>
-
